@@ -1,14 +1,11 @@
-from fastapi import FastAPI, Request
+from flask import Flask, request
 
-app = FastAPI()
+app = Flask(__name__)
 
-@app.get("/")
-async def read_root():
-    return {"message": "eBay endpoint is live 🎉"}
-
-@app.post("/webhook")
-async def handle_webhook(request: Request):
-    body = await request.body()
-    print(body)
-    return {"status": "received"}
-
+@app.route('/', methods=['POST'])
+def ebay_verification():
+    data = request.get_json()
+    challenge = data.get('challenge')
+    if challenge:
+        return 'hyebaytoken123', 200  # Make sure this token matches the one in eBay
+    return 'Missing challenge', 400
