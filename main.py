@@ -1,62 +1,27 @@
-from flask import Flask, request, make_response
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Privacy Policy – My Research Tool</title>
+</head>
+<body>
+  <h1>Privacy Policy</h1>
+  <p><strong>Last updated:</strong> July 26, 2025</p>
 
-app = Flask(__name__)
+  <h2>1. Information We Access</h2>
+  <p>My Research Tool only accesses publicly available, read-only item and seller data via the eBay API. We do <em>not</em> access or store any private eBay member information (e.g. buyer names, addresses, payment details).</p>
 
-@app.route("/", methods=["GET", "POST"])
-def ebay_webhook():
-    # STEP A: eBay’s webhook verification: GET /?challenge=TOKEN
-    if request.method == "GET":
-        challenge = request.args.get("challenge")
-        if challenge:
-            return make_response(challenge, 200)
-        return "Missing challenge", 400
+  <h2>2. No Personal Data Collection</h2>
+  <p>We do not collect, store, or share any personally identifiable information (PII) about you. All data shown in the application comes directly from eBay’s public endpoints at the moment you request it.</p>
 
-    # STEP B: real push notifications will POST JSON here
-    if request.method == "POST":
-        payload = request.get_json(force=True)
-        print("Received event:", payload)
-        return {"status": "received"}, 200
+  <h2>3. Data Retention</h2>
+  <p>We do not retain any eBay user or listing data beyond the lifetime of your browser session. No databases, logs, or caches persist your data on our servers.</p>
 
-    return "", 405
+  <h2>4. Cookies & Analytics</h2>
+  <p>We do not use cookies or third-party analytics tools to track your activity.</p>
 
-# 1️⃣ Privacy policy URL
-@app.route("/privacy", methods=["GET"])
-def privacy():
-    return """
-      <html>
-        <head><title>Privacy policy</title></head>
-        <body>
-          <h1>Privacy policy</h1>
-          <p>
-            This application only fetches &amp; displays public, read-only item and
-            seller data. No eBay user data is ever stored or persisted.
-          </p>
-        </body>
-      </html>
-    """, 200
+  <h2>5. Contact Us</h2>
+  <p>If you have any questions or concerns about this Privacy Policy, please contact us at <a href="mailto:hello@myresearchtool.com">hello@myresearchtool.com</a>.</p>
+</body>
+</html>
 
-# 2️⃣ OAuth success callback: eBay will redirect you here with ?code=...
-@app.route("/callback", methods=["GET"])
-def callback():
-    code = request.args.get("code")
-    if code:
-        return make_response(f"Authorization code: {code}", 200)
-    return "Missing code", 400
-
-# 3️⃣ OAuth decline page
-@app.route("/decline", methods=["GET"])
-def decline():
-    return """
-      <html>
-        <head><title>Authorization Declined</title></head>
-        <body>
-          <h1>Authorization Declined</h1>
-          <p>
-            You declined the sign-in. You can <a href="/">retry</a> if you change your mind.
-          </p>
-        </body>
-      </html>
-    """, 200
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
