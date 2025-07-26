@@ -1,26 +1,46 @@
-from flask import Flask, request, make_response
+from flask import Flask, request, jsonify, render_template_string
 
 app = Flask(__name__)
 
+# 1) Privacy‐policy page
+@app.route("/privacy", methods=["GET"])
+def privacy():
+    return render_template_string("""
+      <html><head><title>Privacy Policy</title></head><body>
+      <h1>MyResearchTool Privacy Policy</h1>
+      <p>Your privacy text goes here. We only fetch public, read-only item & seller data...</p>
+      </body></html>
+    """), 200
+
+# 2) OAuth callback (success)
+@app.route("/callback", methods=["GET"])
+def callback():
+    code  = request.args.get("code")
+    error = request.args.get("error")
+    if code:
+        # exchange code for token, etc.
+        return f"Thanks! Received authorization code: {code}", 200
+    elif error:
+        return f"OAuth error: {error}", 400
+    return "No OAuth parameters found.", 400
+
+# 3) Declined page
+@app.route("/decline", methods=["GET"])
+def decline():
+    return "You declined to authorize MyResearchTool.", 200
+
+# Existing eBay verification endpoint
 @app.route("/", methods=["GET", "POST"])
-def ebay_webhook():
-    # Verification handshake (eBay sends GET ?challenge=TOKEN)
+def ebay_verification():
     if request.method == "GET":
-        token = request.args.get("challenge")
-        if token:
-            # echo the token as plain text
-            return make_response(token, 200)
-        # no challenge => bad request
-        return make_response("missing challenge", 400)
-
-    # Actual notifications will arrive as POST JSON bodies
+        challenge = request.args.get("challenge")
+        if challenge:
+            return challenge, 200
     if request.method == "POST":
+        # handle notifications here
         payload = request.get_json(force=True)
-        # TODO: process payload here
-        print("📬 Received event:", payload)
-        return {"status": "received"}, 200
-
-    # any other method => not allowed
+        print("Received event:", payload)
+        return jsonify(status="received"), 200
     return "", 405
 
 if __name__ == "__main__":
