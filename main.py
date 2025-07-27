@@ -1,5 +1,4 @@
-
-from flask import Flask, Response
+from flask import Flask, Response, request
 
 app = Flask(__name__)
 
@@ -10,8 +9,8 @@ def home():
     <p>Available routes:</p>
     <ul>
       <li><a href="/privacy">Privacy Policy</a></li>
-      <li><a href="/ebay/auth-success">Auth Success</a></li>
-      <li><a href="/ebay/auth-fail">Auth Fail</a></li>
+      <li><a href="/callback?code=TEST">Callback</a></li>
+      <li><a href="/decline">Decline</a></li>
     </ul>
     """
 
@@ -42,6 +41,31 @@ def privacy():
 
       <h2>5. Contact Us</h2>
       <p>If you have any questions or concerns about this Privacy Policy, please contact us at <a href="mailto:hello@myresearchtool.com">hello@myresearchtool.com</a>.</p>
+    </body>
+    </html>
+    """
+    return Response(html_content, mimetype='text/html')
+
+@app.route('/callback')
+def callback():
+    code = request.args.get("code")
+    if code:
+        return f"<h1>Authorization code received:</h1><p>{code}</p>"
+    else:
+        return "<h1>No authorization code found.</h1>", 400
+
+@app.route('/decline')
+def decline():
+    html_content = """
+    <!doctype html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <title>Authorization Declined</title>
+    </head>
+    <body>
+      <h1>Authorization Declined</h1>
+      <p>You have declined to authorize the application. Please try again if you wish to continue.</p>
     </body>
     </html>
     """
