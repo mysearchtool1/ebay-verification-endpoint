@@ -33,3 +33,40 @@ def privacy():
     </html>
     """
     return Response(html_content, mimetype='text/html')
+
+@app.route('/ebay/auth-success')
+def auth_success():
+    html_content = """
+    <!doctype html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <title>Authorization Success</title>
+    </head>
+    <body>
+      <h1>Authorization Successful</h1>
+      <p>Thank you for authorizing the app. You can now close this window.</p>
+    </body>
+    </html>
+    """
+    return Response(html_content, mimetype='text/html')
+
+@app.route('/ebay/auth-fail')
+def auth_fail():
+    html_content = """
+    <!doctype html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <title>Authorization Failed</title>
+    </head>
+    <body>
+      <h1>Authorization Declined</h1>
+      <p>You have declined to authorize the application. Please try again if you wish to continue.</p>
+    </body>
+    </html>
+    """
+    return Response(html_content, mimetype='text/html')
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
