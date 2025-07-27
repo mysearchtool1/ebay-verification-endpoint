@@ -2,6 +2,18 @@ from flask import Flask, Response
 
 app = Flask(__name__)
 
+@app.route('/')
+def home():
+    return """
+    <h1>eBay Verification Endpoint</h1>
+    <p>Available routes:</p>
+    <ul>
+      <li><a href="/privacy">Privacy Policy</a></li>
+      <li><a href="/ebay/auth-success">Auth Success</a></li>
+      <li><a href="/ebay/auth-fail">Auth Fail</a></li>
+    </ul>
+    """
+
 @app.route('/privacy')
 def privacy():
     html_content = """
