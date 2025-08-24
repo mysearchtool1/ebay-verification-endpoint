@@ -1,0 +1,28 @@
+# JYSK Stock & Price Monitoring Configuration
+
+# Browser settings
+headless: true  # Set to true for production, false for testing
+timeout_ms: 30000
+check_frequency: "7d"
+
+# Store configuration with stock thresholds
+stores:
+  - name: "JYSK Viva Park, Casablanca"
+    stock_threshold: 6
+  - name: "JYSK Aeria Mall, Casablanca"
+    stock_threshold: 8
+
+# Price monitoring settings
+price_monitoring:
+  enabled: true
+  price_change_threshold_percent: 5
+
+# Alert configuration
+alerts:
+  min_hours_between_same_alert: 12
+  telegram:
+    enabled: true
+    bot_token: "8160850148:AAF-WxqkNTqow91IMSSfWklyM2UBv9BNKZ4"
+    chat_id: "1421525758"
+  whatsapp:
+    enabled: false
