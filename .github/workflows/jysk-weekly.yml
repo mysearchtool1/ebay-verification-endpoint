@@ -2,7 +2,7 @@ name: JYSK monitor (weekly)
 
 on:
   schedule:
-    - cron: "0 21 * * 0"        # Sunday 22:00 Casablanca
+    - cron: "0 21 * * 0"   # Sunday 22:00 Africa/Casablanca ≈ 21:00 UTC
   workflow_dispatch: {}
 
 jobs:
@@ -41,7 +41,7 @@ jobs:
       - name: Import products
         run: python app.py import-csv products.csv
 
-      # --- PROVE secrets & Telegram work (sends a test message) ---
+      # --- PROVE secrets & Telegram work ---
       - name: Telegram test ping
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
