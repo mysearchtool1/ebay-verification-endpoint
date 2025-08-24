@@ -72,7 +72,7 @@ class JYSKMonitor:
         with open(config_path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
 
-    # [CHANGE] — override YAML with env secrets if they exist
+    # [CHANGE] – override YAML with env secrets if they exist
     def _apply_env_overrides(self) -> None:
         alerts = self.config.setdefault('alerts', {})
         tg = alerts.setdefault('telegram', {})
@@ -80,8 +80,10 @@ class JYSKMonitor:
         env_chat  = os.getenv("TELEGRAM_CHAT_ID")
         if env_token:
             tg['bot_token'] = env_token
+            logger.info("🔑 Using TELEGRAM_BOT_TOKEN from environment")
         if env_chat:
             tg['chat_id'] = str(env_chat)
+            logger.info("🔑 Using TELEGRAM_CHAT_ID from environment")
 
     def init_database(self):
         """Initialize SQLite database with required tables"""
@@ -142,7 +144,7 @@ class JYSKMonitor:
     
     async def scrape_product_info(self, page: Page, product: ProductConfig) -> Tuple[List[StoreStock], PriceInfo]:
         """Scrape stock and price information for a single product"""
-        logger.info(f"Scraping product: {product.jumia_sku}")
+        logger.info(f"🔍 Scraping product: {product.jumia_sku}")
         
         try:
             # Navigate to product page
@@ -151,12 +153,12 @@ class JYSKMonitor:
             
             # Extract price information
             price_info = await self.extract_price(page)
-            logger.info(f"Found price: {price_info.current_price} DH")
+            logger.info(f"💰 Found price: {price_info.current_price} DH")
             
             # Open the list of stores by clicking 'X magasins'
             drawer_opened = await self.open_store_drawer(page)
             if not drawer_opened:
-                logger.warning(f"Could not open store drawer for {product.jumia_sku}")
+                logger.warning(f"⚠️ Could not open store drawer for {product.jumia_sku}")
                 return [], price_info
             
             await asyncio.sleep(2)
@@ -165,7 +167,7 @@ class JYSKMonitor:
             return stock_info, price_info
             
         except Exception as e:
-            logger.error(f"Error scraping {product.jumia_sku}: {str(e)}")
+            logger.error(f"❌ Error scraping {product.jumia_sku}: {str(e)}")
             return [], PriceInfo(0.0)
     
     async def extract_price(self, page: Page) -> PriceInfo:
@@ -190,11 +192,11 @@ class JYSKMonitor:
                 price = float(re.search(r'(\d+(?:,\d+)*(?:\.\d+)?)', price_text.replace(',', '.')).group(1))
                 return PriceInfo(price)
             
-            logger.warning("Could not find price information")
+            logger.warning("⚠️ Could not find price information")
             return PriceInfo(0.0)
             
         except Exception as e:
-            logger.error(f"Error extracting price: {str(e)}")
+            logger.error(f"❌ Error extracting price: {str(e)}")
             return PriceInfo(0.0)
 
     # ----------------------
@@ -218,7 +220,7 @@ class JYSKMonitor:
             btn = cc_section.locator("button").filter(has_text=MAGASIN_RX).first
 
         if not await btn.count():
-            logger.warning("Could not locate 'X magasins' button inside Click & Collect section")
+            logger.warning("⚠️ Could not locate 'X magasins' button inside Click & Collect section")
             return False
 
         try:
@@ -239,7 +241,7 @@ class JYSKMonitor:
         ).first
         try:
             await drawer.wait_for(state="visible", timeout=4000)
-            logger.info("Successfully opened drawer with: X magasins")
+            logger.info("✅ Successfully opened drawer with: X magasins")
             return True
         except:
             return False
@@ -337,7 +339,7 @@ class JYSKMonitor:
             try:
                 row = await self.find_store_row(page, store_name)
                 if not row:
-                    logger.warning(f"Could not find store: {store_name}")
+                    logger.warning(f"⚠️ Could not find store: {store_name}")
                     ts = int(time.time())
                     await page.screenshot(path=f"debug_{ts}_{_norm(store_name)[:20]}.png", full_page=True)
                     html = await page.content()
@@ -350,9 +352,9 @@ class JYSKMonitor:
                 if qty is not None:
                     status = "in_stock" if qty > 0 else "out_of_stock"
                 stock_info.append(StoreStock(store_name, qty, status, raw))
-                logger.info(f"Found stock for {store_name}: {qty} pieces ({status})")
+                logger.info(f"📦 Found stock for {store_name}: {qty} pieces ({status})")
             except Exception as e:
-                logger.error(f"Error extracting stock for {store_name}: {str(e)}")
+                logger.error(f"❌ Error extracting stock for {store_name}: {str(e)}")
                 stock_info.append(StoreStock(store_name, None, "unknown"))
 
         return stock_info
@@ -376,6 +378,9 @@ class JYSKMonitor:
     def check_alerts(self, product_id: int, stock_info: List[StoreStock], price_info: PriceInfo,
                      reference_price: float, jumia_sku: str, jysk_url: str):
         """Check if any alerts should be triggered"""
+        logger.info(f"🔍 Checking alerts for SKU: {jumia_sku}")
+        logger.info(f"📊 Current price: {price_info.current_price} DH")
+        logger.info(f"📋 Reference price: {reference_price} DH")
 
         # [CHANGE] Price change with optional percentage threshold
         price_cfg = self.config.get('price_monitoring', {})
@@ -383,22 +388,40 @@ class JYSKMonitor:
         try:
             if price_cfg.get('enabled'):
                 pct_threshold = float(price_cfg.get('price_change_threshold_percent', 0))
-        except Exception:
+                logger.info(f"⚙️ Price monitoring enabled with {pct_threshold}% threshold")
+            else:
+                logger.info("⚙️ Price monitoring disabled in config")
+        except Exception as e:
+            logger.error(f"❌ Error parsing price config: {e}")
             pct_threshold = None
 
         if price_info.current_price > 0 and reference_price > 0:
             diff_abs = abs(price_info.current_price - reference_price)
+            diff_pct = (diff_abs / reference_price) * 100.0
+            
+            logger.info(f"💰 Price difference: {diff_abs:.2f} DH ({diff_pct:.2f}%)")
+            
             trigger = False
             if pct_threshold is None:
                 trigger = diff_abs >= 0.01
+                logger.info(f"🎯 Using absolute threshold (0.01 DH): {trigger}")
             else:
-                diff_pct = (diff_abs / reference_price) * 100.0
                 trigger = diff_pct >= pct_threshold
+                logger.info(f"🎯 Using percentage threshold ({pct_threshold}%): {trigger}")
 
-            if trigger and self.should_send_alert(product_id, 'price_change', 'price_change'):
-                self.send_price_change_alert(jumia_sku, jysk_url, reference_price, price_info.current_price)
-                self.record_alert(product_id, 'price_change', 'price_change',
-                                  str(reference_price), str(price_info.current_price))
+            if trigger:
+                logger.info("🚨 Price change threshold exceeded!")
+                if self.should_send_alert(product_id, 'price_change', 'price_change'):
+                    logger.info("📤 Sending price change alert...")
+                    self.send_price_change_alert(jumia_sku, jysk_url, reference_price, price_info.current_price)
+                    self.record_alert(product_id, 'price_change', 'price_change',
+                                      str(reference_price), str(price_info.current_price))
+                else:
+                    logger.info("⏰ Alert cooldown active - not sending duplicate alert")
+            else:
+                logger.info("✅ Price change within threshold - no alert needed")
+        else:
+            logger.warning("⚠️ Invalid price data - skipping price alerts")
         
         # Stock alerts
         stock_below_limit = False
@@ -406,8 +429,10 @@ class JYSKMonitor:
             store_threshold = next((s['stock_threshold'] for s in self.config['stores'] if s['name'] == stock.store_name), None)
             if store_threshold and stock.qty is not None and stock.qty < store_threshold:
                 stock_below_limit = True
+                logger.info(f"📦 {stock.store_name}: {stock.qty} < {store_threshold} (below limit)")
         
         if stock_below_limit and self.should_send_alert(product_id, 'stock', 'stock_low'):
+            logger.info("📤 Sending stock alert...")
             self.send_stock_alert(jumia_sku, jysk_url, stock_info)
             self.record_alert(product_id, 'stock', 'stock_low', '', '')
     
@@ -454,8 +479,8 @@ SKU: {jumia_sku}
 Link: {jysk_url}
 
 Current Stock:
-📍 JYSK Viva Park: {viva_park_stock} (limit: 6)
-📍 JYSK Aeria Mall: {aeria_mall_stock} (limit: 8)
+🏪 JYSK Viva Park: {viva_park_stock} (limit: 6)
+🏪 JYSK Aeria Mall: {aeria_mall_stock} (limit: 8)
 
 ⚠️ STOCK BELOW LIMITS
 Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}"""
@@ -483,26 +508,28 @@ Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}"""
         """Send message via Telegram Bot API"""
         tg = self.config.get('alerts', {}).get('telegram', {})
         if not tg or not tg.get('enabled', False):
-            logger.info("Telegram alerts disabled")
+            logger.info("📵 Telegram alerts disabled")
             return
         
         bot_token = tg.get('bot_token', '')
         chat_id = str(tg.get('chat_id', '')).strip()
         if not bot_token or not chat_id:
-            logger.warning("Telegram not configured (missing token/chat_id) — skipping send.")
+            logger.warning("⚠️ Telegram not configured (missing token/chat_id) – skipping send.")
             return
         
+        logger.info(f"📤 Sending Telegram message to chat {chat_id}")
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         payload = {'chat_id': chat_id, 'text': message}
         
         try:
             response = requests.post(url, json=payload, timeout=20)
             if response.status_code == 200:
-                logger.info("Telegram alert sent successfully")
+                logger.info("✅ Telegram alert sent successfully")
+                logger.info(f"📄 Response: {response.text[:100]}...")
             else:
-                logger.error(f"Failed to send Telegram alert: {response.status_code} - {response.text[:200]}")
+                logger.error(f"❌ Failed to send Telegram alert: {response.status_code} - {response.text[:200]}")
         except Exception as e:
-            logger.error(f"Error sending Telegram alert: {str(e)}")
+            logger.error(f"💥 Error sending Telegram alert: {str(e)}")
     
     async def run_monitoring_cycle(self):
         conn = sqlite3.connect(self.db_path)
@@ -513,10 +540,11 @@ Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}"""
         conn.close()
         
         if not products:
-            logger.info("No active products found")
+            logger.info("⚠️ No active products found in database")
+            logger.info("💡 Make sure to run: python app.py import-csv products.csv")
             return
         
-        logger.info(f"Found {len(products)} active products to monitor")
+        logger.info(f"📋 Found {len(products)} active products to monitor")
         
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=self.config['headless'])
@@ -527,6 +555,7 @@ Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}"""
                 product = ProductConfig(jumia_sku, jysk_url, reference_price, click_text, row_selector)
                 
                 try:
+                    logger.info(f"🔄 Processing product {jumia_sku}...")
                     stock_info, price_info = await self.scrape_product_info(page, product)
                     self.save_snapshot(product_id, stock_info, price_info)
                     
@@ -535,16 +564,18 @@ Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}"""
                     
                     await asyncio.sleep(2)
                 except Exception as e:
-                    logger.error(f"Error processing product {jumia_sku}: {str(e)}")
+                    logger.error(f"❌ Error processing product {jumia_sku}: {str(e)}")
             
             await browser.close()
         
-        logger.info("Monitoring cycle completed")
+        logger.info("✅ Monitoring cycle completed")
     
     def import_products_from_csv(self, csv_path: str):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         imported_count = 0
+        
+        logger.info(f"📂 Importing products from {csv_path}")
         
         with open(csv_path, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
@@ -555,10 +586,11 @@ Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}"""
                 ''', (row['jumia_sku'], row['jysk_url'], float(row['reference_price']), 
                       row.get('click_text'), row.get('row_selector')))
                 imported_count += 1
+                logger.info(f"✅ Imported: {row['jumia_sku']} - {row['reference_price']} DH")
         
         conn.commit()
         conn.close()
-        logger.info(f"Successfully imported {imported_count} products from {csv_path}")
+        logger.info(f"📊 Successfully imported {imported_count} products from {csv_path}")
     
     def export_latest_snapshots_to_csv(self, csv_path: str):
         conn = sqlite3.connect(self.db_path)
@@ -579,7 +611,7 @@ Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}"""
             writer.writerow(['jumia_sku', 'jysk_url', 'reference_price', 'store_name', 'current_stock', 'status', 'current_price', 'last_checked'])
             writer.writerows(results)
         
-        logger.info(f"Latest snapshots exported to {csv_path}")
+        logger.info(f"📊 Latest snapshots exported to {csv_path}")
 
 
 def main():
@@ -602,17 +634,17 @@ def main():
     elif args.every:
         days = int(args.every[:-1])
         interval = days * 24 * 3600
-        logger.info(f"Starting monitoring loop every {days} days")
+        logger.info(f"🔄 Starting monitoring loop every {days} days")
         while True:
             try:
                 asyncio.run(monitor.run_monitoring_cycle())
-                logger.info(f"Monitoring cycle complete. Sleeping for {days} days...")
+                logger.info(f"💤 Monitoring cycle complete. Sleeping for {days} days...")
                 time.sleep(interval)
             except KeyboardInterrupt:
-                logger.info("Monitoring stopped by user")
+                logger.info("⏹️ Monitoring stopped by user")
                 break
             except Exception as e:
-                logger.error(f"Error in monitoring loop: {str(e)}")
+                logger.error(f"❌ Error in monitoring loop: {str(e)}")
                 time.sleep(3600)
     else:
         parser.print_help()
