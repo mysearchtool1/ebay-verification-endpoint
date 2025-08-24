@@ -1,22 +1,30 @@
-name: JYSK monitor (weekly)
+=name: JYSK monitor (weekly)
 
 on:
   schedule:
-    - cron: "0 21 * * 0"   # Sunday 22:00 Casablanca (~UTC+1)
+    - cron: "0 21 * * 0"        # Sunday 22:00 Casablanca
   workflow_dispatch: {}
 
 jobs:
   run-monitor:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # If your repo secrets are BOT_TOKEN/CHAT_ID, map them here; otherwise remove these two lines.
-    # env:
-    #   TELEGRAM_BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-    #   TELEGRAM_CHAT_ID:   ${{ secrets.CHAT_ID }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # --- PROVE which code is running ---
+      - name: Show revision + app markers
+        run: |
+          echo "HEAD SHA: $(git rev-parse HEAD)"
+          echo "Has _apply_env_overrides: $(grep -c '_apply_env_overrides' app.py || true)"
+          echo "Has env log line: $(grep -c 'Using TELEGRAM_BOT_TOKEN from environment' app.py || true)"
+          python - << 'PY'
+          import pathlib
+          s = pathlib.Path("app.py").read_text(encoding="utf-8", errors="ignore")
+          print("ENV_OVERRIDE_PRESENT:", ("os.getenv" in s and "TELEGRAM_BOT_TOKEN" in s))
+          PY
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -33,38 +41,20 @@ jobs:
       - name: Import products
         run: python app.py import-csv products.csv
 
-      # --- DEBUG 1: confirm secrets are present (prints only lengths) ---
-      - name: Debug secrets presence
+      # --- PROVE secrets & Telegram work (sends a test message) ---
+      - name: Telegram test ping
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python - << 'PY'
-          import os
-          t=os.getenv("TELEGRAM_BOT_TOKEN"); c=os.getenv("TELEGRAM_CHAT_ID")
-          print("HAS_TOKEN:", bool(t), "LEN:", len(t) if t else 0)
-          print("HAS_CHAT :", bool(c), "LEN:", len(c) if c else 0)
-          PY
-
-      # --- DEBUG 2: call Telegram API directly ---
-      - name: Ping Telegram directly
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python - << 'PY'
-          import os, requests, sys
-          t=os.environ.get("TELEGRAM_BOT_TOKEN")
-          c=os.environ.get("TELEGRAM_CHAT_ID")
-          if not t or not c:
-              print("Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID"); sys.exit(1)
-          gm=requests.get(f"https://api.telegram.org/bot{t}/getMe", timeout=20)
-          print("getMe ->", gm.status_code, gm.text[:120])
-          r=requests.post(f"https://api.telegram.org/bot{t}/sendMessage",
-                          json={"chat_id": c, "text": "✅ Heartbeat (direct API)"},
-                          timeout=20)
-          print("sendMessage ->", r.status_code, r.text[:200])
-          r.raise_for_status()
+          set -e
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=✅ Actions test ping $(date -u +'%F %T UTC')" \
+          | python - <<'PY'
+          import sys, json
+          resp=json.load(sys.stdin)
+          print("Telegram OK:", resp.get("ok"), "desc:", resp.get("description"))
           PY
 
       - name: Run monitor once
@@ -72,24 +62,6 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python app.py run-once
-
-      # Always send a heartbeat message at the end as well
-      - name: Send Telegram heartbeat
-        if: always()
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python - << 'PY'
-          import os, requests, sys
-          t=os.environ.get("TELEGRAM_BOT_TOKEN"); c=os.environ.get("TELEGRAM_CHAT_ID")
-          if not t or not c:
-              print("Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID"); sys.exit(1)
-          r=requests.post(f"https://api.telegram.org/bot{t}/sendMessage",
-                          json={"chat_id": c, "text": "✅ GitHub Actions: run completed (heartbeat)"},
-                          timeout=20)
-          print("HTTP", r.status_code, r.text[:200]); r.raise_for_status()
-          PY
 
       - name: Upload debug artifacts
         if: always()
