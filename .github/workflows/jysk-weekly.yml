@@ -1,4 +1,4 @@
-=name: JYSK monitor (weekly)
+name: JYSK monitor (weekly)
 
 on:
   schedule:
