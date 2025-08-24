@@ -13,6 +13,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history
+          clean: true     # Clean working directory
+
+      # NEW DEBUG STEP
+      - name: Verify Code Version
+        run: |
+          echo "=== Current Git Commit ==="
+          git log --oneline -1
+          echo ""
+          echo "=== App.py Import Method Check ==="
+          grep -A 10 "import_products_from_csv" app.py | head -15
+          echo ""
+          echo "=== Enhanced Logging Check ==="
+          grep -c "📂 Importing products" app.py || echo "Enhanced logging NOT found"
+          echo ""
+          echo "=== CSV Content Check ==="
+          cat products.csv
 
       # --- PROVE which code is running ---
       - name: Show revision + app markers
