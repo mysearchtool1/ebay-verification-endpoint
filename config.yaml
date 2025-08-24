@@ -22,7 +22,5 @@ alerts:
   min_hours_between_same_alert: 12
   telegram:
     enabled: true
-    bot_token: "8160850148:AAF-WxqkNTqow91IMSSfWklyM2UBv9BNKZ4"
-    chat_id: "1421525758"
-  whatsapp:
-    enabled: false
+    bot_token: ""   # laissé vide; override par les secrets GitHub
+    chat_id: ""     # laissé vide; override par les secrets GitHub
