@@ -90,14 +90,14 @@ class JYSKMonitor:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Products table (tighten 'active')
+        # Products table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS products (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 jumia_sku TEXT UNIQUE NOT NULL,
                 jysk_url TEXT NOT NULL,
                 reference_price REAL NOT NULL,
-                active INTEGER NOT NULL DEFAULT 1,
+                active INTEGER DEFAULT 1,
                 click_text TEXT,
                 row_selector TEXT
             )
@@ -505,46 +505,49 @@ Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}"""
         self.send_telegram_message(message)
     
     def send_telegram_message(self, message: str):
-        """Send message via Telegram Bot API"""
+        """Send message via Telegram Bot API with clear logs."""
         tg = self.config.get('alerts', {}).get('telegram', {})
         if not tg or not tg.get('enabled', False):
             logger.info("📵 Telegram alerts disabled")
             return
         
-        bot_token = tg.get('bot_token', '')
-        chat_id = str(tg.get('chat_id', '')).strip()
+        bot_token = (tg.get('bot_token') or '').strip()
+        chat_id = str(tg.get('chat_id') or '').strip()
         if not bot_token or not chat_id:
             logger.warning("⚠️ Telegram not configured (missing token/chat_id) – skipping send.")
             return
         
-        logger.info(f"📤 Sending Telegram message to chat {chat_id}")
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         payload = {'chat_id': chat_id, 'text': message}
-        
+
+        logger.info(f"🚚 Telegram request: POST {url} chat_id={chat_id}")
         try:
-            response = requests.post(url, json=payload, timeout=20)
-            if response.status_code == 200:
-                logger.info("✅ Telegram alert sent successfully")
-                logger.info(f"📄 Response: {response.text[:100]}...")
-            else:
-                logger.error(f"❌ Failed to send Telegram alert: {response.status_code} - {response.text[:200]}")
+            resp = requests.post(url, json=payload, timeout=20)
+            logger.info(f"📨 Telegram HTTP {resp.status_code}: {resp.text[:200]}")
+            if resp.status_code != 200:
+                logger.error("❌ Telegram send failed (see response above).")
         except Exception as e:
-            logger.error(f"💥 Error sending Telegram alert: {str(e)}")
+            logger.error(f"💥 Telegram request error: {e}")
     
     async def run_monitoring_cycle(self):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        cursor.execute('SELECT id, jumia_sku, jysk_url, reference_price, click_text, row_selector FROM products WHERE active = 1')
+        cursor.execute("""
+            SELECT id, jumia_sku, jysk_url, reference_price, click_text, row_selector
+            FROM products
+            WHERE active = 1
+            ORDER BY jumia_sku
+        """)
         products = cursor.fetchall()
         conn.close()
         
         if not products:
             logger.info("⚠️ No active products found in database")
-            logger.info("💡 Make sure to run: python app.py import-csv products.csv")
+            logger.info("💡 Make sure to run: python app.py import-csv products.csv (headers: jumia_sku,jysk_url,reference_price)")
             return
         
-        logger.info(f"📋 Found {len(products)} active products to monitor")
+        logger.info(f"📋 Found {len(products)} active products to monitor: {[p[1] for p in products]}")
         
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=self.config['headless'])
@@ -571,69 +574,64 @@ Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}"""
         logger.info("✅ Monitoring cycle completed")
     
     def import_products_from_csv(self, csv_path: str):
-        """Robust CSV import with upsert and debug logs"""
+        """
+        Import products so that DB == CSV exactly.
+        - Handles UTF-8 BOM headers (Excel) via utf-8-sig
+        - Trims fields, converts 90,00 -> 90.00
+        - Logs every row and final DB count
+        """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        imported_count = 0
-        
+
         logger.info(f"📂 Importing products from {csv_path}")
-        with open(csv_path, 'r', encoding='utf-8') as f:
+        # Make DB match CSV exactly for each run
+        cursor.execute("DELETE FROM products")
+        conn.commit()
+
+        imported_count = 0
+        skipped = 0
+
+        with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
             reader = csv.DictReader(f)
+            for i, row in enumerate(reader, start=2):  # start=2 -> first data line
+                sku = (row.get("jumia_sku") or row.get("\ufeffjumia_sku") or "").strip()
+                url = (row.get("jysk_url") or "").strip()
+                ref_raw = (row.get("reference_price") or "").strip()
 
-            # Validate headers
-            expected = ['jumia_sku', 'jysk_url', 'reference_price']
-            if not reader.fieldnames:
-                logger.error("❌ CSV has no header row")
-                conn.close()
-                return
-            missing = [k for k in expected if k not in reader.fieldnames]
-            if missing:
-                logger.error(f"❌ CSV headers missing: {missing} ; got={reader.fieldnames}")
-                conn.close()
-                return
-
-            for i, row in enumerate(reader, start=2):
-                # Skip empty rows
-                if not (row.get('jumia_sku') or row.get('jysk_url') or row.get('reference_price')):
-                    logger.info(f"Skip empty row at line {i}")
+                if not sku or not url or not ref_raw:
+                    logger.warning(f"↪️  Skipping row {i}: missing field(s): {row}")
+                    skipped += 1
                     continue
+
+                ref_clean = ref_raw.replace(",", ".")
                 try:
-                    sku = (row.get('jumia_sku') or '').strip()
-                    url = (row.get('jysk_url') or '').strip()
-                    ref = float(str(row.get('reference_price') or '').strip())
-                    ct  = (row.get('click_text') or None)
-                    rs  = (row.get('row_selector') or None)
-
-                    if not sku or not url:
-                        logger.warning(f"Row {i}: missing sku/url -> {row}")
-                        continue
-
-                    # UPSERT and ensure active=1
-                    cursor.execute('''
-                        INSERT INTO products (jumia_sku, jysk_url, reference_price, click_text, row_selector, active)
-                        VALUES (?, ?, ?, ?, ?, 1)
-                        ON CONFLICT(jumia_sku) DO UPDATE SET
-                            jysk_url=excluded.jysk_url,
-                            reference_price=excluded.reference_price,
-                            click_text=excluded.click_text,
-                            row_selector=excluded.row_selector,
-                            active=1
-                    ''', (sku, url, ref, ct, rs))
-                    imported_count += 1
-                    logger.info(f"✅ Imported row {i}: sku={sku}, ref={ref}")
+                    ref = float(ref_clean)
                 except Exception as e:
-                    logger.error(f"Row {i} import failed: {e}; raw={row}")
+                    logger.warning(f"↪️  Skipping row {i}: bad price '{ref_raw}' ({e})")
+                    skipped += 1
+                    continue
+
+                cursor.execute(
+                    """
+                    INSERT INTO products (jumia_sku, jysk_url, reference_price, click_text, row_selector, active)
+                    VALUES (?, ?, ?, NULL, NULL, 1)
+                    """,
+                    (sku, url, ref),
+                )
+                imported_count += 1
+                logger.info(f"✅ Imported row {i}: sku={sku} ref={ref} url={url}")
 
         conn.commit()
 
-        # Debug: show what is actually in DB
-        cur = conn.cursor()
-        cur.execute("SELECT jumia_sku, jysk_url, reference_price, active FROM products ORDER BY rowid")
-        rows = cur.fetchall()
-        logger.info(f"🗃️ Products in DB after import ({len(rows)}): {rows}")
-
+        # Log what’s really in the DB now
+        cursor.execute("SELECT COUNT(*) FROM products WHERE active=1")
+        total_active = cursor.fetchone()[0]
+        cursor.execute("SELECT jumia_sku FROM products WHERE active=1 ORDER BY jumia_sku")
+        sku_list = [r[0] for r in cursor.fetchall()]
         conn.close()
-        logger.info(f"📊 Successfully imported {imported_count} products from {csv_path}")
+
+        logger.info(f"📊 Import finished: imported={imported_count}, skipped={skipped}")
+        logger.info(f"📦 Active products in DB now: {total_active} → {sku_list}")
     
     def export_latest_snapshots_to_csv(self, csv_path: str):
         conn = sqlite3.connect(self.db_path)
