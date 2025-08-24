@@ -22,5 +22,8 @@ alerts:
   min_hours_between_same_alert: 12
   telegram:
     enabled: true
-    bot_token: ""   # laissé vide; override par les secrets GitHub
-    chat_id: ""     # laissé vide; override par les secrets GitHub
+    bot_token: ""   # leave empty; GitHub Secrets override
+    chat_id: ""     # leave empty; GitHub Secrets override
+price_monitoring:
+  enabled: true
+  price_change_threshold_percent: 5
