@@ -13,7 +13,7 @@ import time
 import logging
 import argparse
 import unicodedata
-import os  # [CHANGE] env for secrets
+import os  # env for secrets
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Tuple
@@ -63,7 +63,7 @@ MAGASIN_RX = re.compile(r"\b\d+\s+magasin(s)?\b", re.I)
 class JYSKMonitor:
     def __init__(self, config_path: str = "config.yaml"):
         self.config = self.load_config(config_path)
-        self._apply_env_overrides()  # [CHANGE] pull TELEGRAM_* from env if present
+        self._apply_env_overrides()  # pull TELEGRAM_* from env if present
         self.db_path = "jysk_stock.db"
         self.init_database()
         
@@ -72,7 +72,7 @@ class JYSKMonitor:
         with open(config_path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
 
-    # [CHANGE] – override YAML with env secrets if they exist
+    # override YAML with env secrets if they exist
     def _apply_env_overrides(self) -> None:
         alerts = self.config.setdefault('alerts', {})
         tg = alerts.setdefault('telegram', {})
@@ -90,14 +90,14 @@ class JYSKMonitor:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Products table
+        # Products table (tighten 'active')
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS products (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 jumia_sku TEXT UNIQUE NOT NULL,
                 jysk_url TEXT NOT NULL,
                 reference_price REAL NOT NULL,
-                active INTEGER DEFAULT 1,
+                active INTEGER NOT NULL DEFAULT 1,
                 click_text TEXT,
                 row_selector TEXT
             )
@@ -382,7 +382,7 @@ class JYSKMonitor:
         logger.info(f"📊 Current price: {price_info.current_price} DH")
         logger.info(f"📋 Reference price: {reference_price} DH")
 
-        # [CHANGE] Price change with optional percentage threshold
+        # Price change with optional percentage threshold
         price_cfg = self.config.get('price_monitoring', {})
         pct_threshold = None
         try:
@@ -571,24 +571,67 @@ Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}"""
         logger.info("✅ Monitoring cycle completed")
     
     def import_products_from_csv(self, csv_path: str):
+        """Robust CSV import with upsert and debug logs"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         imported_count = 0
         
         logger.info(f"📂 Importing products from {csv_path}")
-        
         with open(csv_path, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
-            for row in reader:
-                cursor.execute('''
-                    INSERT OR REPLACE INTO products (jumia_sku, jysk_url, reference_price, click_text, row_selector)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (row['jumia_sku'], row['jysk_url'], float(row['reference_price']), 
-                      row.get('click_text'), row.get('row_selector')))
-                imported_count += 1
-                logger.info(f"✅ Imported: {row['jumia_sku']} - {row['reference_price']} DH")
-        
+
+            # Validate headers
+            expected = ['jumia_sku', 'jysk_url', 'reference_price']
+            if not reader.fieldnames:
+                logger.error("❌ CSV has no header row")
+                conn.close()
+                return
+            missing = [k for k in expected if k not in reader.fieldnames]
+            if missing:
+                logger.error(f"❌ CSV headers missing: {missing} ; got={reader.fieldnames}")
+                conn.close()
+                return
+
+            for i, row in enumerate(reader, start=2):
+                # Skip empty rows
+                if not (row.get('jumia_sku') or row.get('jysk_url') or row.get('reference_price')):
+                    logger.info(f"Skip empty row at line {i}")
+                    continue
+                try:
+                    sku = (row.get('jumia_sku') or '').strip()
+                    url = (row.get('jysk_url') or '').strip()
+                    ref = float(str(row.get('reference_price') or '').strip())
+                    ct  = (row.get('click_text') or None)
+                    rs  = (row.get('row_selector') or None)
+
+                    if not sku or not url:
+                        logger.warning(f"Row {i}: missing sku/url -> {row}")
+                        continue
+
+                    # UPSERT and ensure active=1
+                    cursor.execute('''
+                        INSERT INTO products (jumia_sku, jysk_url, reference_price, click_text, row_selector, active)
+                        VALUES (?, ?, ?, ?, ?, 1)
+                        ON CONFLICT(jumia_sku) DO UPDATE SET
+                            jysk_url=excluded.jysk_url,
+                            reference_price=excluded.reference_price,
+                            click_text=excluded.click_text,
+                            row_selector=excluded.row_selector,
+                            active=1
+                    ''', (sku, url, ref, ct, rs))
+                    imported_count += 1
+                    logger.info(f"✅ Imported row {i}: sku={sku}, ref={ref}")
+                except Exception as e:
+                    logger.error(f"Row {i} import failed: {e}; raw={row}")
+
         conn.commit()
+
+        # Debug: show what is actually in DB
+        cur = conn.cursor()
+        cur.execute("SELECT jumia_sku, jysk_url, reference_price, active FROM products ORDER BY rowid")
+        rows = cur.fetchall()
+        logger.info(f"🗃️ Products in DB after import ({len(rows)}): {rows}")
+
         conn.close()
         logger.info(f"📊 Successfully imported {imported_count} products from {csv_path}")
     
