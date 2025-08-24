@@ -13,6 +13,7 @@ import time
 import logging
 import argparse
 import unicodedata
+import os  # [CHANGE] env for secrets
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Tuple
@@ -51,7 +52,7 @@ class PriceInfo:
 
 
 # ----------------------
-# Helpers (NEW)
+# Helpers
 # ----------------------
 def _norm(s: str) -> str:
     return unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode().lower().strip()
@@ -62,6 +63,7 @@ MAGASIN_RX = re.compile(r"\b\d+\s+magasin(s)?\b", re.I)
 class JYSKMonitor:
     def __init__(self, config_path: str = "config.yaml"):
         self.config = self.load_config(config_path)
+        self._apply_env_overrides()  # [CHANGE] pull TELEGRAM_* from env if present
         self.db_path = "jysk_stock.db"
         self.init_database()
         
@@ -69,7 +71,18 @@ class JYSKMonitor:
         """Load configuration from YAML file"""
         with open(config_path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
-    
+
+    # [CHANGE] — override YAML with env secrets if they exist
+    def _apply_env_overrides(self) -> None:
+        alerts = self.config.setdefault('alerts', {})
+        tg = alerts.setdefault('telegram', {})
+        env_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        env_chat  = os.getenv("TELEGRAM_CHAT_ID")
+        if env_token:
+            tg['bot_token'] = env_token
+        if env_chat:
+            tg['chat_id'] = str(env_chat)
+
     def init_database(self):
         """Initialize SQLite database with required tables"""
         conn = sqlite3.connect(self.db_path)
@@ -140,19 +153,14 @@ class JYSKMonitor:
             price_info = await self.extract_price(page)
             logger.info(f"Found price: {price_info.current_price} DH")
             
-            # Open the list of stores by clicking 'X magasins' (the real actionable control)
+            # Open the list of stores by clicking 'X magasins'
             drawer_opened = await self.open_store_drawer(page)
             if not drawer_opened:
                 logger.warning(f"Could not open store drawer for {product.jumia_sku}")
                 return [], price_info
             
-            # Ensure results are actually rendered
             await asyncio.sleep(2)
-            
-            # Force city to Casablanca & ensure list is populated (handles fresh/headless sessions)
             await self.set_city_to_casablanca(page)
-            
-            # Extract stock information for target stores (robust to virtualization)
             stock_info = await self.extract_stock_info(page)
             return stock_info, price_info
             
@@ -163,13 +171,11 @@ class JYSKMonitor:
     async def extract_price(self, page: Page) -> PriceInfo:
         """Extract price information from product page"""
         try:
-            # Try to find promotional price first
             promo_price_element = await page.query_selector('.ssr-product-price.offerprice .ssr-product-price__value')
             if promo_price_element:
                 promo_text = await promo_price_element.text_content()
                 promo_price = float(re.search(r'(\d+(?:,\d+)*(?:\.\d+)?)', promo_text.replace(',', '.')).group(1))
                 
-                # Original price
                 original_price_element = await page.query_selector('.ssr-product-price.normalprice .ssr-product-price__value')
                 original_price = None
                 if original_price_element:
@@ -178,7 +184,6 @@ class JYSKMonitor:
                 
                 return PriceInfo(promo_price, original_price, True)
             
-            # Regular price
             price_element = await page.query_selector('.ssr-product-price.normalprice .ssr-product-price__value, .ssr-product-price__value')
             if price_element:
                 price_text = await price_element.text_content()
@@ -193,14 +198,9 @@ class JYSKMonitor:
             return PriceInfo(0.0)
 
     # ----------------------
-    # Drawer opening (NEW)
+    # Drawer opening
     # ----------------------
     async def open_store_drawer(self, page: Page) -> bool:
-        """
-        Opens the store availability drawer by clicking the 'X magasins' button
-        inside the 'Click & Collect' block. Returns True if the drawer is visible.
-        """
-        # Scope to the Click & Collect card to avoid false positives
         cc_section = page.locator(
             "section:has-text('Click & Collect'), "
             "div:has(h2:has-text('Click & Collect')), "
@@ -211,7 +211,6 @@ class JYSKMonitor:
         except:
             pass
 
-        # Prefer role-based selector with regex name, then class + text
         btn = cc_section.get_by_role("button", name=MAGASIN_RX).first
         if not await btn.count():
             btn = cc_section.locator("button.btn-link").filter(has_text=re.compile(r"magasin", re.I)).first
@@ -226,7 +225,6 @@ class JYSKMonitor:
             await btn.scroll_into_view_if_needed()
             await btn.click(timeout=2500)
         except Exception:
-            # Fallback JS click if overlay swallows events
             try:
                 el_handle = await btn.element_handle()
                 if el_handle:
@@ -234,7 +232,6 @@ class JYSKMonitor:
             except:
                 pass
 
-        # Wait for drawer / modal / list to appear
         drawer = page.locator(
             "[role='dialog'], .modal, .drawer, "
             ".store-selector, [data-testid*='store-selector'], "
@@ -248,17 +245,14 @@ class JYSKMonitor:
             return False
 
     # ----------------------
-    # City selection (NEW)
+    # City selection
     # ----------------------
     async def set_city_to_casablanca(self, page: Page):
-        """Type 'Casablanca' into the drawer search/city input to force the correct store list."""
-        # Common search inputs within selector panels
         inputs = page.locator(
             "input[placeholder*='ville'], input[placeholder*='city'], input[type='search'], "
             "input[aria-label*='ville'], input[aria-label*='City']"
         )
         if await inputs.count() == 0:
-            # Sometimes a button opens a sub-panel to choose the city
             try:
                 await page.locator("button:has-text('Changer de magasin'), button:has-text('Sélectionnez votre magasin')").first.click(timeout=1500)
             except:
@@ -271,14 +265,13 @@ class JYSKMonitor:
             await el.type("Casablanca", delay=35)
             await page.wait_for_timeout(800)
             await page.wait_for_load_state("networkidle")
-            # Wait for at least one row to show up
             try:
                 await page.wait_for_selector(".store-list >> .store, .shop, li, [role='option']", timeout=4000)
             except:
                 pass
 
     # ----------------------
-    # Store discovery (NEW)
+    # Store discovery
     # ----------------------
     async def find_store_row(self, page: Page, target_name: str):
         target_norm = _norm(target_name)
@@ -286,7 +279,6 @@ class JYSKMonitor:
         if await container.count() == 0:
             container = page.locator("body")
 
-        # Scroll to trigger virtualization, up to ~12 "screens"
         for _ in range(12):
             rows = container.locator(".store, .shop, li, [role='option'], [data-testid*='store']")
             n = await rows.count()
@@ -299,7 +291,6 @@ class JYSKMonitor:
                 if target_norm in txt:
                     await row.scroll_into_view_if_needed()
                     return row
-            # load more
             try:
                 await container.evaluate("(el)=>{el.scrollBy(0, el.clientHeight || 600)}")
             except:
@@ -308,8 +299,6 @@ class JYSKMonitor:
         return None
 
     async def extract_qty_from_row(self, row) -> Tuple[Optional[int], str]:
-        """Try several patterns to get quantity and raw text from a store row."""
-        # explicit numbers in common sub-elements
         for sel in [".qty, [data-testid*='qty'], .badge", ".stock, .availability", "span, div"]:
             try:
                 els = row.locator(sel)
@@ -325,7 +314,6 @@ class JYSKMonitor:
                 if m:
                     return int(m.group(1)), t
 
-        # textual status
         try:
             txt = (await row.inner_text() or "").lower()
         except:
@@ -333,15 +321,13 @@ class JYSKMonitor:
         if any(k in txt for k in ["épuisé", "rupture", "pas de stock", "out of stock"]):
             return 0, txt
         if any(k in txt for k in ["en stock", "disponible", "available"]):
-            return 1, txt  # minimum 1 if not specified
+            return 1, txt
         return None, txt
 
     async def extract_stock_info(self, page: Page) -> List[StoreStock]:
-        """Extract stock information for configured stores from the opened drawer."""
         stock_info: List[StoreStock] = []
         target_stores = [store['name'] for store in self.config['stores']]
 
-        # Make sure some list-like content is visible
         try:
             await page.wait_for_selector('[role="dialog"], .store-list, .drawer', timeout=5000)
         except:
@@ -352,7 +338,6 @@ class JYSKMonitor:
                 row = await self.find_store_row(page, store_name)
                 if not row:
                     logger.warning(f"Could not find store: {store_name}")
-                    # debug evidence
                     ts = int(time.time())
                     await page.screenshot(path=f"debug_{ts}_{_norm(store_name)[:20]}.png", full_page=True)
                     html = await page.content()
@@ -373,7 +358,6 @@ class JYSKMonitor:
         return stock_info
     
     def save_snapshot(self, product_id: int, stock_info: List[StoreStock], price_info: PriceInfo):
-        """Save stock and price snapshot to database"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         timestamp = int(time.time())
@@ -389,14 +373,32 @@ class JYSKMonitor:
         conn.commit()
         conn.close()
     
-    def check_alerts(self, product_id: int, stock_info: List[StoreStock], price_info: PriceInfo, reference_price: float, jumia_sku: str, jysk_url: str):
+    def check_alerts(self, product_id: int, stock_info: List[StoreStock], price_info: PriceInfo,
+                     reference_price: float, jumia_sku: str, jysk_url: str):
         """Check if any alerts should be triggered"""
-        
-        # Price change
-        if price_info.current_price > 0 and abs(price_info.current_price - reference_price) >= 0.01:
-            if self.should_send_alert(product_id, 'price_change', 'price_change'):
+
+        # [CHANGE] Price change with optional percentage threshold
+        price_cfg = self.config.get('price_monitoring', {})
+        pct_threshold = None
+        try:
+            if price_cfg.get('enabled'):
+                pct_threshold = float(price_cfg.get('price_change_threshold_percent', 0))
+        except Exception:
+            pct_threshold = None
+
+        if price_info.current_price > 0 and reference_price > 0:
+            diff_abs = abs(price_info.current_price - reference_price)
+            trigger = False
+            if pct_threshold is None:
+                trigger = diff_abs >= 0.01
+            else:
+                diff_pct = (diff_abs / reference_price) * 100.0
+                trigger = diff_pct >= pct_threshold
+
+            if trigger and self.should_send_alert(product_id, 'price_change', 'price_change'):
                 self.send_price_change_alert(jumia_sku, jysk_url, reference_price, price_info.current_price)
-                self.record_alert(product_id, 'price_change', 'price_change', str(reference_price), str(price_info.current_price))
+                self.record_alert(product_id, 'price_change', 'price_change',
+                                  str(reference_price), str(price_info.current_price))
         
         # Stock alerts
         stock_below_limit = False
@@ -410,7 +412,6 @@ class JYSKMonitor:
             self.record_alert(product_id, 'stock', 'stock_low', '', '')
     
     def should_send_alert(self, product_id: int, store_name: str, alert_type: str) -> bool:
-        """Check if we should send an alert based on cooldown period"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -424,11 +425,9 @@ class JYSKMonitor:
         
         count = cursor.fetchone()[0]
         conn.close()
-        
         return count == 0
     
     def record_alert(self, product_id: int, store_name: str, alert_type: str, prev_value: str, curr_value: str):
-        """Record that an alert was sent"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -441,7 +440,6 @@ class JYSKMonitor:
         conn.close()
     
     def send_stock_alert(self, jumia_sku: str, jysk_url: str, stock_info: List[StoreStock]):
-        """Send stock alert via Telegram with both stores info"""
         viva_park_stock = "N/A"
         aeria_mall_stock = "N/A"
         
@@ -465,7 +463,6 @@ Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}"""
         self.send_telegram_message(message)
     
     def send_price_change_alert(self, jumia_sku: str, jysk_url: str, old_price: float, new_price: float):
-        """Send price change alert via Telegram"""
         direction = "📈 HIGHER" if new_price > old_price else "📉 LOWER"
         change_amount = abs(new_price - old_price)
         
@@ -484,30 +481,30 @@ Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}"""
     
     def send_telegram_message(self, message: str):
         """Send message via Telegram Bot API"""
-        if not self.config['alerts']['telegram']['enabled']:
+        tg = self.config.get('alerts', {}).get('telegram', {})
+        if not tg or not tg.get('enabled', False):
             logger.info("Telegram alerts disabled")
             return
         
-        bot_token = self.config['alerts']['telegram']['bot_token']
-        chat_id = self.config['alerts']['telegram']['chat_id']
+        bot_token = tg.get('bot_token', '')
+        chat_id = str(tg.get('chat_id', '')).strip()
+        if not bot_token or not chat_id:
+            logger.warning("Telegram not configured (missing token/chat_id) — skipping send.")
+            return
         
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        payload = {
-            'chat_id': chat_id,
-            'text': message
-        }
+        payload = {'chat_id': chat_id, 'text': message}
         
         try:
-            response = requests.post(url, json=payload, timeout=10)
+            response = requests.post(url, json=payload, timeout=20)
             if response.status_code == 200:
                 logger.info("Telegram alert sent successfully")
             else:
-                logger.error(f"Failed to send Telegram alert: {response.status_code} - {response.text}")
+                logger.error(f"Failed to send Telegram alert: {response.status_code} - {response.text[:200]}")
         except Exception as e:
             logger.error(f"Error sending Telegram alert: {str(e)}")
     
     async def run_monitoring_cycle(self):
-        """Run a complete monitoring cycle for all active products"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -523,27 +520,20 @@ Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}"""
         
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=self.config['headless'])
-            # Seed Casablanca locale/UA if you want:
             page = await browser.new_page()
             
             for product_data in products:
                 product_id, jumia_sku, jysk_url, reference_price, click_text, row_selector = product_data
-                
                 product = ProductConfig(jumia_sku, jysk_url, reference_price, click_text, row_selector)
                 
                 try:
                     stock_info, price_info = await self.scrape_product_info(page, product)
-                    
-                    # Save data even if empty (for tracking)
                     self.save_snapshot(product_id, stock_info, price_info)
                     
-                    # Check for alerts
                     if stock_info or price_info.current_price > 0:
                         self.check_alerts(product_id, stock_info, price_info, reference_price, jumia_sku, jysk_url)
                     
-                    # Delay between products
                     await asyncio.sleep(2)
-                    
                 except Exception as e:
                     logger.error(f"Error processing product {jumia_sku}: {str(e)}")
             
@@ -552,10 +542,8 @@ Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}"""
         logger.info("Monitoring cycle completed")
     
     def import_products_from_csv(self, csv_path: str):
-        """Import products from CSV file"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
         imported_count = 0
         
         with open(csv_path, 'r', encoding='utf-8') as f:
@@ -573,7 +561,6 @@ Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}"""
         logger.info(f"Successfully imported {imported_count} products from {csv_path}")
     
     def export_latest_snapshots_to_csv(self, csv_path: str):
-        """Export latest snapshots to CSV file"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -613,10 +600,8 @@ def main():
     elif args.command == 'run-once':
         asyncio.run(monitor.run_monitoring_cycle())
     elif args.every:
-        # Loop mode
         days = int(args.every[:-1])
-        interval = days * 24 * 3600  # seconds
-        
+        interval = days * 24 * 3600
         logger.info(f"Starting monitoring loop every {days} days")
         while True:
             try:
@@ -628,7 +613,7 @@ def main():
                 break
             except Exception as e:
                 logger.error(f"Error in monitoring loop: {str(e)}")
-                time.sleep(3600)  # Sleep 1 hour before retry
+                time.sleep(3600)
     else:
         parser.print_help()
 
