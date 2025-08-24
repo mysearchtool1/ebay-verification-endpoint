@@ -15,7 +15,7 @@ stores:
 # Price monitoring settings
 price_monitoring:
   enabled: true
-  price_change_threshold_percent: 5
+  price_change_threshold_percent: 1
 
 # Alert configuration
 alerts:
@@ -24,6 +24,3 @@ alerts:
     enabled: true
     bot_token: ""   # leave empty; GitHub Secrets override
     chat_id: ""     # leave empty; GitHub Secrets override
-price_monitoring:
-  enabled: true
-  price_change_threshold_percent: 5
